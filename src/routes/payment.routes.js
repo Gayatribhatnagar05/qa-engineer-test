@@ -13,7 +13,7 @@ router.get('/', authenticate, (req, res) => {
     // BUG A: Amount is being converted to string instead of remaining as number
     const formattedPayments = payments.map(p => ({
       id: p.id,
-      amount: p.amount.toString(), // ← BUG: Should be number, not string
+      amount: parseFloat(p.amount), // FIX Bug A: return amount as a number, not a string
       currency: p.currency,
       status: p.status,
       customer_email: p.customer_email,
@@ -49,7 +49,7 @@ router.get('/:id', authenticate, (req, res) => {
       success: true,
       data: {
         id: payment.id,
-        amount: payment.amount.toString(), // Same bug as above
+        amount: parseFloat(payment.amount), // FIX Bug A
         currency: payment.currency,
         status: payment.status,
         customer_email: payment.customer_email,
@@ -75,7 +75,7 @@ router.post('/', authenticate, (req, res) => {
     // BUG B: No maximum amount check - allows unrealistic amounts
     // Real systems should have limits (e.g., max €50,000 per transaction)
     // Missing: if (amount > 50000) { return 400 }
-
+    if (amount > 50000) { return res.status(400).json({ error: 'Amount exceeds the maximum allowed per transaction (50,000)' }); } // FIX Bug B
     if (!currency || !['EUR', 'USD', 'GBP'].includes(currency)) {
       return res.status(400).json({ error: 'Valid currency is required (EUR, USD, GBP)' });
     }

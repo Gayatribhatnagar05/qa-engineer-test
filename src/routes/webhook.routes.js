@@ -7,6 +7,9 @@ const router = express.Router();
 // Webhook secret for HMAC verification
 const WEBHOOK_SECRET = 'test-webhook-secret-key';
 
+// FIX Bug E: remember which webhook events were already handled (idempotency)
+const processedEvents = new Set();
+
 /**
  * POST /api/webhooks/payment-status
  * 
@@ -18,30 +21,36 @@ router.post('/payment-status', (req, res) => {
     const signature = req.headers['x-webhook-signature'];
     const { payment_id, status, event_id } = req.body;
 
-    // BUG D: No signature verification
-    // Real systems MUST verify webhook signatures to prevent spoofing
-    // Missing validation below:
-    
-    // const expectedSignature = crypto
-    //   .createHmac('sha256', WEBHOOK_SECRET)
-    //   .update(JSON.stringify(req.body))
-    //   .digest('hex');
-    // 
-    // if (signature !== expectedSignature) {
-    //   return res.status(401).json({ error: 'Invalid signature' });
-    // }
+    // FIX Bug D: verify the HMAC-SHA256 signature before trusting the webhook
+    const expectedSignature = crypto
+      .createHmac('sha256', WEBHOOK_SECRET)
+      .update(JSON.stringify(req.body))
+      .digest('hex');
+
+    const signatureBuffer = Buffer.from(String(signature || ''));
+    const expectedBuffer = Buffer.from(expectedSignature);
+
+    // Constant-time comparison avoids timing attacks; lengths must match first
+    if (
+      signatureBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
+    ) {
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
 
     if (!payment_id || !status) {
       return res.status(400).json({ error: 'payment_id and status required' });
     }
 
-    // BUG E: No idempotency check
-    // Webhooks can be delivered multiple times - must be idempotent
-    // Missing check below:
-    
-    // if (db.processed_webhooks.includes(event_id)) {
-    //   return res.status(200).json({ message: 'Already processed' });
-    // }
+    // FIX Bug E: event_id is needed to detect duplicate deliveries
+    if (!event_id) {
+      return res.status(400).json({ error: 'event_id required' });
+    }
+
+    // FIX Bug E: if this event was already processed, acknowledge without changing anything
+    if (processedEvents.has(event_id)) {
+      return res.status(200).json({ message: 'Already processed' });
+    }
 
     const payment = getPaymentById(payment_id);
     if (!payment) {
@@ -52,8 +61,8 @@ router.post('/payment-status', (req, res) => {
     payment.status = status;
     payment.webhook_received_at = new Date();
 
-    // Mark webhook as processed (if idempotency was implemented)
-    // db.processed_webhooks.push(event_id);
+    // FIX Bug E: mark as processed only after a successful update
+    processedEvents.add(event_id);
 
     res.status(200).json({
       success: true,
